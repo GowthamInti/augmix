@@ -36,9 +36,11 @@ from third_party.WideResNet_pytorch.wideresnet import WideResNet
 
 import torch
 import torch.backends.cudnn as cudnn
+import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import datasets
 from torchvision import transforms
+from torchvision.models import  resnet18,convnext_tiny
 
 parser = argparse.ArgumentParser(
     description='Trains a CIFAR Classifier',
@@ -54,8 +56,15 @@ parser.add_argument(
     '-m',
     type=str,
     default='wrn',
-    choices=['wrn', 'allconv', 'densenet', 'resnext'],
+    choices=['wrn', 'allconv', 'densenet', 'resnext','resnet18','convnext_tiny'],
     help='Choose architecture.')
+parser.add_argument(
+    '--pretrained',
+    '-pt',
+    type=bool,
+    default=True,
+    choices=[True,False],
+    help='choice to choose for pre trained weights')
 # Optimization options
 parser.add_argument(
     '--epochs', '-e', type=int, default=100, help='Number of epochs to train.')
@@ -141,7 +150,11 @@ CORRUPTIONS = [
     'brightness', 'contrast', 'elastic_transform', 'pixelate',
     'jpeg_compression'
 ]
-
+PERTRUBATIONS = [
+  'gaussian_blur','shot_noise_2', 'zoom_blur', 'tilt','snow', 'shot_noise_3','translate',
+  'speckle_noise','motion_blur','gaussian_noise','gaussian_noise_2','gaussian_noise_3','rotate','brightness',
+  'scale','shear','spatter','speckle_noise_2','speckle_noise_3','zoom_blur'
+]
 
 def get_lr(step, total_steps, lr_max, lr_min):
   """Compute learning rate according to cosine annealing schedule."""
@@ -285,6 +298,27 @@ def test_c(net, test_data, base_path):
 
   return np.mean(corruption_accs)
 
+def test_p(net, test_data, base_path):
+  """Evaluate network on given corrupted dataset."""
+  pertrubation_accs = []
+  for pertrubation in PERTRUBATIONS:
+    # Reference to original data is mutated
+    test_data.data = np.load(base_path + pertrubation + '.npy')
+    test_data.targets = torch.LongTensor(np.load(base_path + 'labels.npy'))
+
+    test_loader = torch.utils.data.DataLoader(
+        test_data,
+        batch_size=args.eval_batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True)
+
+    test_loss, test_acc = test(net, test_loader)
+    pertrubation_accs.append(test_acc)
+    print('{}\n\tTest Loss {:.3f} | Test Error {:.3f}'.format(
+        pertrubation, test_loss, 100 - 100. * test_acc))
+
+  return np.mean(pertrubation_accs)
 
 def main():
   torch.manual_seed(1)
@@ -305,6 +339,8 @@ def main():
     test_data = datasets.CIFAR10(
         './data/cifar', train=False, transform=test_transform, download=True)
     base_c_path = './data/cifar/CIFAR-10-C/'
+    base_p_path = './data/cifar/CIFAR-10-P/'
+
     num_classes = 10
   else:
     train_data = datasets.CIFAR100(
@@ -338,7 +374,30 @@ def main():
     net = AllConvNet(num_classes)
   elif args.model == 'resnext':
     net = resnext29(num_classes=num_classes)
-
+  elif args.model == 'resnet18':
+    if args.pretrained :
+      net = resnet18(pretrained = True)
+      num_ftrs = net.fc.in_features
+      net.fc = nn.Sequential(
+                            nn.Linear(num_ftrs, num_classes),
+                            nn.LogSoftmax(dim=1))
+    else :
+      net = resnet18(pretrained = False)
+      num_ftrs = net.fc.in_features
+      net.fc = nn.Sequential(
+                            nn.Linear(num_ftrs, num_classes),
+                            nn.LogSoftmax(dim=1))
+  elif args.model == 'convnext_tiny':
+    if args.pretrained:
+      net = convnext_tiny(pretrained = True)
+      net.classifier[2] = nn.Sequential(
+                            nn.Linear(1000, num_classes),
+                            nn.LogSoftmax(dim=1))
+    else :
+      net = convnext_tiny(pretrained = False)
+      net.classifier[2] = nn.Sequential(
+                                nn.Linear(1000, num_classes),
+                                nn.LogSoftmax(dim=1))
   optimizer = torch.optim.SGD(
       net.parameters(),
       args.learning_rate,
@@ -369,6 +428,9 @@ def main():
 
     test_c_acc = test_c(net, test_data, base_c_path)
     print('Mean Corruption Error: {:.3f}'.format(100 - 100. * test_c_acc))
+
+    test_p_acc = test_p(net, test_data, base_p_path)
+    print('Mean Petrubation Error: {:.3f}'.format(100 - 100. * test_c_acc))
     return
 
   scheduler = torch.optim.lr_scheduler.LambdaLR(
