@@ -36,11 +36,13 @@ from third_party.WideResNet_pytorch.wideresnet import WideResNet
 
 import torch
 import torch.backends.cudnn as cudnn
+from torch.utils.tensorboard import SummaryWriter
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import datasets
 from torchvision import transforms
-from torchvision.models import  resnet18,convnext_tiny
+from torchvision.models import  resnet18
+import timm
 
 parser = argparse.ArgumentParser(
     description='Trains a CIFAR Classifier',
@@ -389,15 +391,10 @@ def main():
                             nn.LogSoftmax(dim=1))
   elif args.model == 'convnext_tiny':
     if args.pretrained:
-      net = convnext_tiny(pretrained = True)
-      net.classifier[2] = nn.Sequential(
-                            nn.Linear(1000, num_classes),
-                            nn.LogSoftmax(dim=1))
+      net = timm.create_model('convnext_tiny',pretrained=True,num_classes = num_classes)
     else :
-      net = convnext_tiny(pretrained = False)
-      net.classifier[2] = nn.Sequential(
-                                nn.Linear(1000, num_classes),
-                                nn.LogSoftmax(dim=1))
+      net = timm.create_model('convnext_tiny',pretrained=False,num_classes = num_classes)
+                        
   optimizer = torch.optim.SGD(
       net.parameters(),
       args.learning_rate,
@@ -430,7 +427,7 @@ def main():
     print('Mean Corruption Error: {:.3f}'.format(100 - 100. * test_c_acc))
 
     test_p_acc = test_p(net, test_data, base_p_path)
-    print('Mean Petrubation Error: {:.3f}'.format(100 - 100. * test_c_acc))
+    print('Mean Petrubation Error: {:.3f}'.format(100 - 100. * test_p_acc))
     return
 
   scheduler = torch.optim.lr_scheduler.LambdaLR(
@@ -452,13 +449,17 @@ def main():
     f.write('epoch,time(s),train_loss,test_loss,test_error(%)\n')
 
   best_acc = 0
+  writer = SummaryWriter(args.save)
+
   print('Beginning training from epoch:', start_epoch + 1)
   for epoch in range(start_epoch, args.epochs):
     begin_time = time.time()
 
     train_loss_ema = train(net, train_loader, optimizer, scheduler)
     test_loss, test_acc = test(net, test_loader)
-
+    writer.add_scalar('Loss/train', train_loss_ema,epoch)
+    writer.add_scalar('Loss/test', test_loss, epoch)
+    writer.add_scalar('Loss/test_acc', test_acc, epoch)
     is_best = test_acc > best_acc
     best_acc = max(test_acc, best_acc)
     checkpoint = {
@@ -489,9 +490,11 @@ def main():
         ' Test Error {4:.2f}'
         .format((epoch + 1), int(time.time() - begin_time), train_loss_ema,
                 test_loss, 100 - 100. * test_acc))
-
+  writer.close()
   test_c_acc = test_c(net, test_data, base_c_path)
   print('Mean Corruption Error: {:.3f}'.format(100 - 100. * test_c_acc))
+  test_p_acc = test_p(net, test_data, base_p_path)
+  print('Mean Pertrubation Error: {:.3f}'.format(100 - 100. * test_p_acc))
 
   with open(log_path, 'a') as f:
     f.write('%03d,%05d,%0.6f,%0.5f,%0.2f\n' %
