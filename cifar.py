@@ -74,7 +74,7 @@ parser.add_argument(
     '--learning-rate',
     '-lr',
     type=float,
-    default=0.1,
+    default=0.01,
     help='Initial learning rate.')
 parser.add_argument(
     '--batch-size', '-b', type=int, default=128, help='Batch size.')
@@ -90,6 +90,8 @@ parser.add_argument(
 parser.add_argument(
     '--layers', default=40, type=int, help='total number of layers')
 parser.add_argument('--widen-factor', default=2, type=int, help='Widen factor')
+parser.add_argument('--scheduler', default='LambdaLR',type=str,choices=['CosineAnnealingLR','LambdaLR'], help='learning rate scheduler')
+parser.add_argument('--optim', default='SGD', type=str,choices=['SGD','AdamW'], help='optimizer')
 parser.add_argument(
     '--droprate', default=0.0, type=float, help='Dropout probability')
 # AugMix options
@@ -311,19 +313,19 @@ def main():
 
   if args.dataset == 'cifar10':
     train_data = datasets.CIFAR10(
-        './data/cifar', train=True, transform=train_transform, download=True)
+        '/work/ws-tmp/g059598-AugmixSA/augmix/data/cifar', train=True, transform=train_transform, download=True)
     test_data = datasets.CIFAR10(
-        './data/cifar', train=False, transform=test_transform, download=True)
-    base_c_path = './data/cifar/CIFAR-10-C/'
+        '/work/ws-tmp/g059598-AugmixSA/augmix/data/cifar', train=False, transform=test_transform, download=True)
+    base_c_path = '/work/ws-tmp/g059598-AugmixSA/augmix/data/cifar/CIFAR-10-C/'
     
 
     num_classes = 10
   else:
     train_data = datasets.CIFAR100(
-        './data/cifar', train=True, transform=train_transform, download=True)
+        '/work/ws-tmp/g059598-AugmixSA/augmix/data/cifar', train=True, transform=train_transform, download=True)
     test_data = datasets.CIFAR100(
-        './data/cifar', train=False, transform=test_transform, download=True)
-    base_c_path = './data/cifar/CIFAR-100-C/'
+        '/work/ws-tmp/g059598-AugmixSA/augmix/data/cifar', train=False, transform=test_transform, download=True)
+    base_c_path = '/work/ws-tmp/g059598-AugmixSA/augmix/data/cifar/CIFAR-100-C/'
     num_classes = 100
 
   train_data = AugMixDataset(train_data, preprocess, args.no_jsd)
@@ -356,20 +358,26 @@ def main():
       num_ftrs = net.fc.in_features
       net.fc = nn.Sequential(
                             nn.Linear(num_ftrs, num_classes),
-                            nn.LogSoftmax(dim=1))
+                            )
     else :
       net = resnet18(pretrained = False)
       num_ftrs = net.fc.in_features
       net.fc = nn.Sequential(
                             nn.Linear(num_ftrs, num_classes),
-                            nn.LogSoftmax(dim=1))
+                            )
   elif args.model == 'convnext_tiny':
     if args.pretrained:
       net = timm.create_model('convnext_tiny',pretrained=True,num_classes = num_classes)
     else :
       net = timm.create_model('convnext_tiny',pretrained=False,num_classes = num_classes)
-                        
-  optimizer = torch.optim.SGD(
+
+  if args.optim == 'AdamW':
+    optimizer = torch.optim.AdamW(
+      net.parameters(),
+      lr = args.learning_rate,
+      weight_decay=args.decay,)     
+  elif args.optim == 'SGD':                 
+    optimizer = torch.optim.SGD(
       net.parameters(),
       args.learning_rate,
       momentum=args.momentum,
@@ -400,14 +408,18 @@ def main():
     test_c_acc = test_c(net, test_data, base_c_path)
     print('Mean Corruption Error: {:.3f}'.format(100 - 100. * test_c_acc))
     return
-
-  scheduler = torch.optim.lr_scheduler.LambdaLR(
-      optimizer,
-      lr_lambda=lambda step: get_lr(  # pylint: disable=g-long-lambda
-          step,
-          args.epochs * len(train_loader),
-          1,  # lr_lambda computes multiplicative factor
-          1e-6 / args.learning_rate))
+  if args.scheduler == 'CosineAnnealingLR':
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                args.epochs * len(train_loader))
+  elif args.scheduler == 'LambdaLR':
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+                optimizer,
+                lr_lambda=lambda step: get_lr(  # pylint: disable=g-long-lambda
+                step,
+                args.epochs * len(train_loader),
+                1,  # lr_lambda computes multiplicative factor
+                1e-6 / args.learning_rate))
 
   if not os.path.exists(args.save):
     os.makedirs(args.save)
